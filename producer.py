@@ -1,24 +1,67 @@
 import argparse
+import BaseHTTPServer
 import re
-import SocketServer
+import threading
 
 class Server(object):
-    """Toy streaming server. Produces a stream UDP packets to registered consumers.
+    """Toy streaming server. Produces a stream of UDP packets for registered consumers.
+    The following is the HTTP server interface:
 
-    To register a consumer, send a PUT request to the producer. The HTTP request's client IP
-    address is then registered. The payload must contain a number which the port that the
-    consumer will be listening on. The DELETE verb deletes the registartion.
+    PUT /
+        Register a consumer. The request's client IP address and the provided port are used to
+        register that consumer.
 
-    In the commandline example below, nc is used to register a consumer listening at port
-    6714 and then deregisters itself.
+    GET /
+        Check registration status. The request's client IP address and the provided port are used
+        to check the status of the consumer. If the reply's status code is 200, the consumer is
+        registered. If the reply's status code is 404, no such consumer is registered.
 
-    $ nc SERVER PORT
-    PUT / HTTP/1.1
-    6714
+    DELETE /
+        Deregister a consumer. The request's client IP address and the provided port are used to
+        deregister that consumer.
 
-    $ nc SERVER PORT
-    DELETE / HTTP/1.1
-    6714
+    In the commandline examples below, nc is used to register a consumer listening at port
+    6714 and then deregister it.
+
+    Register a consumer:
+
+        $ nc SERVER PORT
+        PUT / HTTP/1.1
+        Content-Length: 4
+
+        6714
+
+        HTTP/1.1 200 OK
+
+    Check the consumer exists:
+
+        $ nc SERVER PORT
+        GET / HTTP/1.1
+        Content-Length: 4
+
+        6714
+
+        HTTP/1.1 200 OK
+
+    Deregister the consumer:
+
+        $ nc SERVER PORT
+        DELETE / HTTP/1.1
+        Content-Length: 4
+
+        6714
+
+        HTTP/1.1 200 OK
+
+    Check the consumer doesn't exist:
+
+        $ nc SERVER PORT
+        GET / HTTP/1.1
+        Content-Length: 4
+
+        6714
+
+        HTTP/1.1 404 Not Found
     """
 
     @staticmethod
@@ -29,7 +72,7 @@ class Server(object):
                             help='Set the port to listen for UDP packets')
         return parser.parse_args()
 
-    class RegistrationHandler(BaseHTTPRequestHandler):
+    class RegistrationHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         """A handler for registering new consumers.
 
         New consumers of the streaming server should PUT. To deregister, existing consumers
@@ -45,16 +88,82 @@ class Server(object):
         # Guarded by lock.
         registered = set()
 
-        def do_PUT(self):
-            pass
+        # Changes the error message format. Breaks encapsulation. Not pretty but this is the
+        # way that BaseHTTPRequestHandler works.
+        error_message_format = '%(code)d %(explain)s: %(message)s\n'
+        error_content_type = 'text/plain'
 
-        def do_DELETE(self):
-            pass
+        def set_headers(self):
+            self.send_header('Content-Type', 'text/plain')
+            self.end_headers()
+
+        def get_port(self):
+            """Get the port from the body. Return a tuple (bool, port) where the first
+            part of the tuple indicates whether a port was found.
+            """
+            content_length = int(self.headers.getheader('Content-Length', 0))
+            port_string = self.rfile.read(content_length)
+            if port_string.isdigit():
+                return (True, int(port_string))
+            return (False, -1)
+
+        def path_supported(self):
+            """Returns whether the path is supported.
+
+            Only / is supported. Mapping paths to handlers is manual in this framework and not
+            necessary for a toy server.
+            """
+            if self.path.strip() == '/':
+                return True
+            return False
+
+        def do_PUT(self):
+            self.set_headers()
+
+            if not self.path_supported():
+                self.send_error(404, 'Path {} not supported'.format(self.path))
+                return
+
+            (port_provided, port) = self.get_port()
+            if not port_provided:
+                self.send_error(400, 'Port not provided in body')
+                return
+
+            consumer = (self.client_address[0], port)
+            with self.lock:
+                if consumer in self.registered:
+                    self.send_error(400, 'Consumer {} already exists'.format(consumer))
+                    return
+                self.registered.add(consumer)
+                self.send_response(200)
+
+        def do_GET(self):
+            self.set_headers()
+
+            if not self.path_supported():
+                self.send_error(404, 'Path {} not supported'.format(self.path))
+                return
+
+            (port_provided, port) = self.get_port()
+            if not port_provided:
+                self.send_error(400, 'Port not provided in body')
+                return
+
+            consumer = (self.client_address[0], port)
+            with self.lock:
+                if consumer in self.registered:
+                    self.send_response(200)
+                else:
+                    self.send_error(404, 'Consumer {} not registered'.format(consumer))
 
     def __init__(self, port):
         """Constructs an HTTP Server listening at the provided port."""
         address = ('localhost', port)
-        httpd = BaseHTTPServer.HTTPServer(address, Server.RegistrationHandler)
+        self.httpd = BaseHTTPServer.HTTPServer(address, Server.RegistrationHandler)
+
+    def run(self):
+        """Run the server forever."""
+        self.httpd.serve_forever()
 
 if __name__ == '__main__':
     args = Server.parse_args()
