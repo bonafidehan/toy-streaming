@@ -1,6 +1,5 @@
 import argparse
 import BaseHTTPServer
-import re
 import threading
 
 class Server(object):
@@ -93,10 +92,6 @@ class Server(object):
         error_message_format = '%(code)d %(explain)s: %(message)s\n'
         error_content_type = 'text/plain'
 
-        def set_headers(self):
-            self.send_header('Content-Type', 'text/plain')
-            self.end_headers()
-
         def get_port(self):
             """Get the port from the body. Return a tuple (bool, port) where the first
             part of the tuple indicates whether a port was found.
@@ -118,8 +113,6 @@ class Server(object):
             return False
 
         def do_PUT(self):
-            self.set_headers()
-
             if not self.path_supported():
                 self.send_error(404, 'Path {} not supported'.format(self.path))
                 return
@@ -138,8 +131,6 @@ class Server(object):
                 self.send_response(200)
 
         def do_GET(self):
-            self.set_headers()
-
             if not self.path_supported():
                 self.send_error(404, 'Path {} not supported'.format(self.path))
                 return
@@ -153,8 +144,9 @@ class Server(object):
             with self.lock:
                 if consumer in self.registered:
                     self.send_response(200)
-                else:
-                    self.send_error(404, 'Consumer {} not registered'.format(consumer))
+                    return
+
+                self.send_error(404, 'Consumer {} not registered'.format(consumer))
 
     def __init__(self, port):
         """Constructs an HTTP Server listening at the provided port."""
@@ -164,6 +156,11 @@ class Server(object):
     def run(self):
         """Run the server forever."""
         self.httpd.serve_forever()
+
+    def shutdown(self):
+        """Shut down and clean up the server."""
+        self.httpd.shutdown()
+        self.httpd.server_close()
 
 if __name__ == '__main__':
     args = Server.parse_args()
