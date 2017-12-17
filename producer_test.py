@@ -35,7 +35,7 @@ class ProducerTests(unittest.TestCase):
         self.assertEqual(404, res.status)
 
     def test_put_get(self):
-        conn =self.build_conn('PUT', '/', ProducerTests.consumer_port_1)
+        conn = self.build_conn('PUT', '/', ProducerTests.consumer_port_1)
         res = conn.getresponse()
         self.assertEqual(200, res.status)
 
@@ -46,6 +46,15 @@ class ProducerTests(unittest.TestCase):
         conn = self.build_conn('GET', '/', ProducerTests.consumer_port_2)
         res = conn.getresponse()
         self.assertEqual(404, res.status)
+
+    def test_double_put(self):
+        conn = self.build_conn('PUT', '/', ProducerTests.consumer_port_1)
+        res = conn.getresponse()
+        self.assertEqual(200, res.status)
+
+        conn = self.build_conn('PUT', '/', ProducerTests.consumer_port_1)
+        res = conn.getresponse()
+        self.assertEqual(400, res.status)
 
 if __name__ == '__main__':
     unittest.main()

@@ -2,6 +2,42 @@ import argparse
 import BaseHTTPServer
 import threading
 
+class Consumers(object):
+    """Thread-safe wrapper around the set of registered consumers.
+    """
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        # Guarded by self.lock.
+        self.registered = set()
+
+    def exists(self, consumer):
+        """Check if the consumer exists. Returns whether the consumer exists.
+        """
+        with self.lock:
+            return consumer in self.registered
+
+    def exists_and_add(self, consumer):
+        """Check if the consumer already exists and add if missing. Returns whether the
+        consumer already exists.
+        """
+        with self.lock:
+            if consumer in self.registered:
+                return True
+
+            self.registered.add(consumer)
+            return False
+
+    def reset(self):
+        """Resets the state by deleting all registered consumers.
+
+        An unfortunate functionality required by the fact that Python's standard HTTP server
+        framework does not allow access to a handler's instance state, forcing Consumers to be
+        stored as static state in RegistrationHandler.
+        """
+        with self.lock:
+            self.registered.clear()
+
 class Server(object):
     """Toy streaming server. Produces a stream of UDP packets for registered consumers.
     The following is the HTTP server interface:
@@ -81,11 +117,9 @@ class Server(object):
         The class has static state. Python's standard HTTP server framework does not allow
         access to a handler's instance state.
 
-        Thread-safe. Its static state is protected by a lock.
+        Thread-safe.
         """
-        lock = threading.Lock()
-        # Guarded by lock.
-        registered = set()
+        consumers = Consumers()
 
         # Changes the error message format. Breaks encapsulation. Not pretty but this is the
         # way that BaseHTTPRequestHandler works.
@@ -123,12 +157,11 @@ class Server(object):
                 return
 
             consumer = (self.client_address[0], port)
-            with self.lock:
-                if consumer in self.registered:
-                    self.send_error(400, 'Consumer {} already exists'.format(consumer))
-                    return
-                self.registered.add(consumer)
-                self.send_response(200)
+            if self.consumers.exists_and_add(consumer):
+                self.send_error(400, 'Consumer {} already exists'.format(consumer))
+                return
+
+            self.send_response(200)
 
         def do_GET(self):
             if not self.path_supported():
@@ -141,12 +174,11 @@ class Server(object):
                 return
 
             consumer = (self.client_address[0], port)
-            with self.lock:
-                if consumer in self.registered:
-                    self.send_response(200)
-                    return
+            if self.consumers.exists(consumer):
+                self.send_response(200)
+                return
 
-                self.send_error(404, 'Consumer {} not registered'.format(consumer))
+            self.send_error(404, 'Consumer {} not registered'.format(consumer))
 
     def __init__(self, port):
         """Constructs an HTTP Server listening at the provided port."""
@@ -155,6 +187,7 @@ class Server(object):
 
     def run(self):
         """Run the server forever."""
+        Server.RegistrationHandler.consumers.reset()
         self.httpd.serve_forever()
 
     def shutdown(self):
